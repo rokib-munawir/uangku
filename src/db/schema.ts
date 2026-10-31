@@ -10,6 +10,10 @@ export const users = mysqlTable('users', {
   avatar: varchar('avatar', { length: 255 }).default('default'),
   monthlyIncomeGoal: double('monthly_income_goal').default(0),
   monthlyExpenseLimit: double('monthly_expense_limit').default(0),
+  expenseLimitPeriod: varchar('expense_limit_period', { length: 20 }).default('bulanan'),
+  telegramChatId: varchar('telegram_chat_id', { length: 64 }).unique(),
+  telegramUsername: varchar('telegram_username', { length: 255 }),
+  telegramLinkCode: varchar('telegram_link_code', { length: 32 }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
@@ -23,6 +27,7 @@ export const transactions = mysqlTable('transactions', {
   tanggal: varchar('tanggal', { length: 10 }).notNull(), // format: YYYY-MM-DD
   catatan: text('catatan'),
   tipe: varchar('tipe', { length: 20 }).notNull(), // 'pemasukan' | 'pengeluaran'
+  buktiPembayaran: text('bukti_pembayaran'),
   createdAt: timestamp('created_at').defaultNow(),
 });
 

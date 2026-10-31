@@ -48,7 +48,7 @@ export const POST: APIRoute = async (context) => {
 
     const userId = session.user.id;
     const body = await context.request.json();
-    const { nominal, kategori, tanggal, catatan, tipe } = body;
+    const { nominal, kategori, tanggal, catatan, tipe, buktiPembayaran } = body;
 
     const newId = Date.now().toString();
     const newTx = {
@@ -58,7 +58,8 @@ export const POST: APIRoute = async (context) => {
       kategori,
       tanggal,
       catatan,
-      tipe
+      tipe,
+      buktiPembayaran: buktiPembayaran || null
     };
 
     await db.insert(transactions).values(newTx);

@@ -25,7 +25,8 @@ export const DashboardContainer: React.FC = () => {
     email: 'rokib@uangku.com',
     avatar: '👨‍💻',
     monthlyIncomeGoal: 10000000,
-    monthlyExpenseLimit: 5000000
+    monthlyExpenseLimit: 5000000,
+    expenseLimitPeriod: 'bulanan'
   });
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -81,6 +82,61 @@ export const DashboardContainer: React.FC = () => {
   const totalExpense = transactions
     .filter(t => t.tipe === 'pengeluaran')
     .reduce((sum, t) => sum + t.nominal, 0);
+
+  // Format local Date object to YYYY-MM-DD using local calendar year, month, date
+  const formatLocalDate = (d: Date) => {
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  // Precise date calculations based on user's current local date
+  const now = new Date();
+  const currentYearStr = `${now.getFullYear()}`;
+  const currentMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+  // Calculate start of current week (Monday) and end of current week (Sunday)
+  const dayOfWeek = now.getDay(); // 0 is Sunday, 1 is Monday...
+  const distanceToMonday = (dayOfWeek === 0 ? -6 : 1) - dayOfWeek;
+  const startOfWeekDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() + distanceToMonday);
+  const endOfWeekDate = new Date(startOfWeekDate.getFullYear(), startOfWeekDate.getMonth(), startOfWeekDate.getDate() + 6);
+
+  const startOfWeekStr = formatLocalDate(startOfWeekDate);
+  const endOfWeekStr = formatLocalDate(endOfWeekDate);
+
+  // Income breakdowns
+  const monthlyIncome = transactions
+    .filter(t => t.tipe === 'pemasukan' && t.tanggal.startsWith(currentMonthStr))
+    .reduce((sum, t) => sum + t.nominal, 0);
+
+  // Expense breakdowns for all 3 periods
+  const weeklyExpense = transactions
+    .filter(t => t.tipe === 'pengeluaran' && t.tanggal >= startOfWeekStr && t.tanggal <= endOfWeekStr)
+    .reduce((sum, t) => sum + t.nominal, 0);
+
+  const monthlyExpense = transactions
+    .filter(t => t.tipe === 'pengeluaran' && t.tanggal.startsWith(currentMonthStr))
+    .reduce((sum, t) => sum + t.nominal, 0);
+
+  const yearlyExpense = transactions
+    .filter(t => t.tipe === 'pengeluaran' && t.tanggal.startsWith(currentYearStr))
+    .reduce((sum, t) => sum + t.nominal, 0);
+
+  // Determine active period based on profile
+  const currentPeriod = profile.expenseLimitPeriod || 'bulanan';
+  const periodExpense = currentPeriod === 'mingguan' 
+    ? weeklyExpense 
+    : currentPeriod === 'tahunan' 
+      ? yearlyExpense 
+      : monthlyExpense;
+
+  const periodLabelsMap: Record<string, { title: string; current: string }> = {
+    mingguan: { title: 'Mingguan', current: 'minggu ini' },
+    bulanan: { title: 'Bulanan', current: 'bulan ini' },
+    tahunan: { title: 'Tahunan', current: 'tahun ini' }
+  };
+  const activePeriodMeta = periodLabelsMap[currentPeriod] || periodLabelsMap.bulanan;
 
   const totalAllocatedSavings = savings.reduce((sum, s) => sum + s.currentAmount, 0);
   
@@ -328,18 +384,22 @@ export const DashboardContainer: React.FC = () => {
             balance={totalBalance}
             income={totalIncome}
             expense={totalExpense}
+            monthlyIncome={monthlyIncome}
+            monthlyExpense={monthlyExpense}
           />
 
           {/* Budget Limit Warning Alert */}
-          {profile.monthlyExpenseLimit > 0 && totalExpense > profile.monthlyExpenseLimit && (
+          {profile.monthlyExpenseLimit > 0 && periodExpense > profile.monthlyExpenseLimit && (
             <div className="p-5 rounded-[24px] bg-bg-custom shadow-neumorph-out border border-danger-custom/30 flex gap-4 items-center animate-pulse">
               <div className="w-12 h-12 rounded-[16px] bg-danger-custom/10 text-danger-custom flex items-center justify-center shadow-neumorph-sm-out">
                 <AlertCircle className="w-6 h-6" />
               </div>
               <div className="flex-1 select-none">
-                <h4 className="text-sm font-extrabold text-danger-custom uppercase tracking-wide">Pengeluaran Melebihi Batas!</h4>
+                <h4 className="text-sm font-extrabold text-danger-custom uppercase tracking-wide">
+                  Pengeluaran Melebihi Batas {activePeriodMeta.title}!
+                </h4>
                 <p className="text-xs font-semibold text-secondary-custom mt-1 leading-normal">
-                  Total pengeluaran Anda (Rp {totalExpense.toLocaleString('id-ID')}) telah melebihi batas anggaran bulanan yang ditentukan di profil (Rp {profile.monthlyExpenseLimit.toLocaleString('id-ID')}).
+                  Total pengeluaran Anda {activePeriodMeta.current} (Rp {periodExpense.toLocaleString('id-ID')}) telah melebihi batas anggaran {activePeriodMeta.title.toLowerCase()} yang ditentukan di profil (Rp {profile.monthlyExpenseLimit.toLocaleString('id-ID')}).
                 </p>
               </div>
             </div>
@@ -493,6 +553,10 @@ export const DashboardContainer: React.FC = () => {
         onSave={saveProfile}
         totalIncome={totalIncome}
         totalExpense={totalExpense}
+        monthlyIncome={monthlyIncome}
+        weeklyExpense={weeklyExpense}
+        monthlyExpense={monthlyExpense}
+        yearlyExpense={yearlyExpense}
       />
     </div>
   );

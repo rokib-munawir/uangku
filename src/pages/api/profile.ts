@@ -41,7 +41,8 @@ export const GET: APIRoute = async (context) => {
       email: session.user.email,
       avatar: 'avatar_user',
       monthlyIncomeGoal: 10000000,
-      monthlyExpenseLimit: 5000000
+      monthlyExpenseLimit: 5000000,
+      expenseLimitPeriod: 'bulanan'
     };
 
     await db.insert(users).values(defaultProfile);
@@ -76,10 +77,13 @@ export const POST: APIRoute = async (context) => {
 
     const userId = session.user.id;
     const body = await context.request.json();
-    const { name, email, avatar, monthlyIncomeGoal, monthlyExpenseLimit } = body;
+    const { name, email, avatar, monthlyIncomeGoal, monthlyExpenseLimit, expenseLimitPeriod } = body;
 
     // Convert emoji string to safe database key (e.g. '👨‍💻' -> 'avatar_dev_m')
     const dbAvatar = getKeyFromEmoji(avatar);
+
+    // Normalize period
+    const validPeriod = ['mingguan', 'bulanan', 'tahunan'].includes(expenseLimitPeriod) ? expenseLimitPeriod : 'bulanan';
 
     // Check if the user exists
     const existingUsers = await db.select().from(users).where(eq(users.id, userId));
@@ -92,7 +96,8 @@ export const POST: APIRoute = async (context) => {
         email,
         avatar: dbAvatar,
         monthlyIncomeGoal: parseFloat(monthlyIncomeGoal) || 0,
-        monthlyExpenseLimit: parseFloat(monthlyExpenseLimit) || 0
+        monthlyExpenseLimit: parseFloat(monthlyExpenseLimit) || 0,
+        expenseLimitPeriod: validPeriod
       });
     } else {
       // Update existing
@@ -101,7 +106,8 @@ export const POST: APIRoute = async (context) => {
         email,
         avatar: dbAvatar,
         monthlyIncomeGoal: parseFloat(monthlyIncomeGoal) || 0,
-        monthlyExpenseLimit: parseFloat(monthlyExpenseLimit) || 0
+        monthlyExpenseLimit: parseFloat(monthlyExpenseLimit) || 0,
+        expenseLimitPeriod: validPeriod
       }).where(eq(users.id, userId));
     }
 

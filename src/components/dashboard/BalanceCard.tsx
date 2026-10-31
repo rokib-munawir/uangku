@@ -6,6 +6,8 @@ interface BalanceCardProps {
   balance: number;
   income: number;
   expense: number;
+  monthlyIncome?: number;
+  monthlyExpense?: number;
   className?: string;
 }
 
@@ -13,6 +15,8 @@ export const BalanceCard: React.FC<BalanceCardProps> = ({
   balance,
   income,
   expense,
+  monthlyIncome,
+  monthlyExpense,
   className = ''
 }) => {
   const formatIDR = (value: number) => {
@@ -23,6 +27,9 @@ export const BalanceCard: React.FC<BalanceCardProps> = ({
       maximumFractionDigits: 0
     }).format(value);
   };
+
+  const displayIncome = monthlyIncome !== undefined ? monthlyIncome : income;
+  const displayExpense = monthlyExpense !== undefined ? monthlyExpense : expense;
 
   return (
     <div className={`grid grid-cols-1 md:grid-cols-3 gap-6 ${className}`}>
@@ -36,7 +43,7 @@ export const BalanceCard: React.FC<BalanceCardProps> = ({
             <Wallet className="w-8 h-8" />
           </div>
           <div>
-            <p className="text-sm font-semibold text-secondary-custom select-none">Total Saldo Anda</p>
+            <p className="text-sm font-semibold text-secondary-custom select-none">Total Saldo Akumulasi</p>
             <h2 className="text-3xl md:text-4xl font-extrabold text-dark-custom tracking-tight mt-1">
               {formatIDR(balance)}
             </h2>
@@ -45,7 +52,7 @@ export const BalanceCard: React.FC<BalanceCardProps> = ({
         
         <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-bg-custom shadow-neumorph-sm-in text-xs font-bold text-success-custom self-start md:self-center select-none">
           <ArrowUpRight className="w-4 h-4" />
-          <span>+2.4% bulan ini</span>
+          <span>Bulan ini aktif</span>
         </div>
       </Card>
 
@@ -55,9 +62,9 @@ export const BalanceCard: React.FC<BalanceCardProps> = ({
           <ArrowUpRight className="w-6 h-6" />
         </div>
         <div className="flex-1 min-w-0">
-          <p className="text-xs font-semibold text-secondary-custom select-none">Pemasukan</p>
+          <p className="text-xs font-semibold text-secondary-custom select-none">Pemasukan (Bulan Ini)</p>
           <h3 className="text-xl font-bold text-success-custom truncate mt-0.5">
-            {formatIDR(income)}
+            {formatIDR(displayIncome)}
           </h3>
         </div>
       </Card>
@@ -68,9 +75,9 @@ export const BalanceCard: React.FC<BalanceCardProps> = ({
           <ArrowDownRight className="w-6 h-6" />
         </div>
         <div className="flex-1 min-w-0">
-          <p className="text-xs font-semibold text-secondary-custom select-none">Pengeluaran</p>
+          <p className="text-xs font-semibold text-secondary-custom select-none">Pengeluaran (Bulan Ini)</p>
           <h3 className="text-xl font-bold text-danger-custom truncate mt-0.5">
-            {formatIDR(expense)}
+            {formatIDR(displayExpense)}
           </h3>
         </div>
       </Card>
