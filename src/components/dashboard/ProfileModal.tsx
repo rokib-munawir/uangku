@@ -13,7 +13,9 @@ export interface UserProfile {
   email: string;
   avatar: string;
   monthlyIncomeGoal: number;
+  weeklyExpenseLimit?: number;
   monthlyExpenseLimit: number;
+  yearlyExpenseLimit?: number;
   expenseLimitPeriod?: ExpenseLimitPeriod;
 }
 
@@ -47,7 +49,24 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
   const [email, setEmail] = useState(profile.email);
   const [avatar, setAvatar] = useState(profile.avatar);
   const [incomeGoal, setIncomeGoal] = useState(profile.monthlyIncomeGoal.toString());
-  const [expenseLimit, setExpenseLimit] = useState(profile.monthlyExpenseLimit.toString());
+  
+  // Independent limits for each period
+  const [weeklyLimit, setWeeklyLimit] = useState(
+    (profile.weeklyExpenseLimit !== undefined && profile.weeklyExpenseLimit > 0
+      ? profile.weeklyExpenseLimit
+      : (profile.monthlyExpenseLimit ? Math.round(profile.monthlyExpenseLimit / 4) : 1250000)
+    ).toString()
+  );
+  const [monthlyLimit, setMonthlyLimit] = useState(
+    (profile.monthlyExpenseLimit !== undefined ? profile.monthlyExpenseLimit : 5000000).toString()
+  );
+  const [yearlyLimit, setYearlyLimit] = useState(
+    (profile.yearlyExpenseLimit !== undefined && profile.yearlyExpenseLimit > 0
+      ? profile.yearlyExpenseLimit
+      : (profile.monthlyExpenseLimit ? profile.monthlyExpenseLimit * 12 : 60000000)
+    ).toString()
+  );
+
   const [expenseLimitPeriod, setExpenseLimitPeriod] = useState<ExpenseLimitPeriod>(profile.expenseLimitPeriod || 'bulanan');
   const [errors, setErrors] = useState<{ name?: string; email?: string }>({});
   const [loggingOut, setLoggingOut] = useState(false);
@@ -180,7 +199,9 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
     setEmail(profile.email);
     setAvatar(profile.avatar);
     setIncomeGoal(profile.monthlyIncomeGoal.toString());
-    setExpenseLimit(profile.monthlyExpenseLimit.toString());
+    setWeeklyLimit((profile.weeklyExpenseLimit ?? (profile.monthlyExpenseLimit ? Math.round(profile.monthlyExpenseLimit / 4) : 1250000)).toString());
+    setMonthlyLimit((profile.monthlyExpenseLimit ?? 5000000).toString());
+    setYearlyLimit((profile.yearlyExpenseLimit ?? (profile.monthlyExpenseLimit ? profile.monthlyExpenseLimit * 12 : 60000000)).toString());
     setExpenseLimitPeriod(profile.expenseLimitPeriod || 'bulanan');
     setErrors({});
     if (isOpen) {
@@ -232,14 +253,34 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
       email: email.trim(),
       avatar,
       monthlyIncomeGoal: parseFloat(incomeGoal) || 0,
-      monthlyExpenseLimit: parseFloat(expenseLimit) || 0,
+      weeklyExpenseLimit: parseFloat(weeklyLimit) || 0,
+      monthlyExpenseLimit: parseFloat(monthlyLimit) || 0,
+      yearlyExpenseLimit: parseFloat(yearlyLimit) || 0,
       expenseLimitPeriod
     });
     onClose();
   }
 
   const incomeGoalNum = parseFloat(incomeGoal) || 0;
-  const expenseLimitNum = parseFloat(expenseLimit) || 0;
+
+  // Active limit string and change handler based on current period tab
+  const currentExpenseLimitStr = expenseLimitPeriod === 'mingguan'
+    ? weeklyLimit
+    : expenseLimitPeriod === 'tahunan'
+      ? yearlyLimit
+      : monthlyLimit;
+
+  const handleExpenseLimitChange = (val: string) => {
+    if (expenseLimitPeriod === 'mingguan') {
+      setWeeklyLimit(val);
+    } else if (expenseLimitPeriod === 'tahunan') {
+      setYearlyLimit(val);
+    } else {
+      setMonthlyLimit(val);
+    }
+  };
+
+  const expenseLimitNum = parseFloat(currentExpenseLimitStr) || 0;
 
   // Dynamically evaluate active expense according to the currently selected period tab
   const activeExpense = expenseLimitPeriod === 'mingguan'
@@ -389,8 +430,8 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
                   <Input
                     label={`Batas Pengeluaran ${periodLabels[expenseLimitPeriod].title} (Rp)`}
                     type="number"
-                    value={expenseLimit}
-                    onChange={(e) => setExpenseLimit(e.target.value)}
+                    value={currentExpenseLimitStr}
+                    onChange={(e) => handleExpenseLimitChange(e.target.value)}
                     placeholder={`Contoh: ${expenseLimitPeriod === 'mingguan' ? '1250000' : expenseLimitPeriod === 'bulanan' ? '5000000' : '60000000'}`}
                     icon={<AlertTriangle className={`w-4 h-4 ${isExpenseOverLimit ? 'text-danger-custom' : 'text-warning-custom'}`} />}
                   />

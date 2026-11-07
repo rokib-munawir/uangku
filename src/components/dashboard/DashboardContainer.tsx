@@ -131,6 +131,12 @@ export const DashboardContainer: React.FC = () => {
       ? yearlyExpense 
       : monthlyExpense;
 
+  const activeExpenseLimit = currentPeriod === 'mingguan'
+    ? (profile.weeklyExpenseLimit || 0)
+    : currentPeriod === 'tahunan'
+      ? (profile.yearlyExpenseLimit || 0)
+      : (profile.monthlyExpenseLimit || 0);
+
   const periodLabelsMap: Record<string, { title: string; current: string }> = {
     mingguan: { title: 'Mingguan', current: 'minggu ini' },
     bulanan: { title: 'Bulanan', current: 'bulan ini' },
@@ -389,7 +395,7 @@ export const DashboardContainer: React.FC = () => {
           />
 
           {/* Budget Limit Warning Alert */}
-          {profile.monthlyExpenseLimit > 0 && periodExpense > profile.monthlyExpenseLimit && (
+          {activeExpenseLimit > 0 && periodExpense > activeExpenseLimit && (
             <div className="p-5 rounded-[24px] bg-bg-custom shadow-neumorph-out border border-danger-custom/30 flex gap-4 items-center animate-pulse">
               <div className="w-12 h-12 rounded-[16px] bg-danger-custom/10 text-danger-custom flex items-center justify-center shadow-neumorph-sm-out">
                 <AlertCircle className="w-6 h-6" />
@@ -399,7 +405,7 @@ export const DashboardContainer: React.FC = () => {
                   Pengeluaran Melebihi Batas {activePeriodMeta.title}!
                 </h4>
                 <p className="text-xs font-semibold text-secondary-custom mt-1 leading-normal">
-                  Total pengeluaran Anda {activePeriodMeta.current} (Rp {periodExpense.toLocaleString('id-ID')}) telah melebihi batas anggaran {activePeriodMeta.title.toLowerCase()} yang ditentukan di profil (Rp {profile.monthlyExpenseLimit.toLocaleString('id-ID')}).
+                  Total pengeluaran Anda {activePeriodMeta.current} (Rp {periodExpense.toLocaleString('id-ID')}) telah melebihi batas anggaran {activePeriodMeta.title.toLowerCase()} yang ditentukan di profil (Rp {activeExpenseLimit.toLocaleString('id-ID')}).
                 </p>
               </div>
             </div>

@@ -11,6 +11,7 @@ export interface Transaction {
   tanggal: string;
   catatan: string;
   tipe: 'pemasukan' | 'pengeluaran';
+  buktiPembayaran?: string | null;
 }
 
 interface RecentTransactionsProps {

@@ -1,7 +1,7 @@
 import { db } from '../../db';
 import { users, transactions, savingsGoals } from '../../db/schema';
 import { eq, desc } from 'drizzle-orm';
-import { parseTransaction, parseReceiptImage } from './ai';
+import { parseTransaction, parseReceiptImage, cleanTransactionDescription } from './ai';
 
 export function getTelegramToken(): string {
   return (
@@ -85,6 +85,73 @@ export function getCurrentMonthString(): string {
   const year = now.getFullYear();
   const month = String(now.getMonth() + 1).padStart(2, '0');
   return `${year}-${month}`;
+}
+
+export function getCurrentYearString(): string {
+  return String(new Date().getFullYear());
+}
+
+export function getCurrentWeekRange(): { start: string; end: string } {
+  const now = new Date();
+  const dayOfWeek = now.getDay();
+  const distanceToMonday = (dayOfWeek === 0 ? -6 : 1) - dayOfWeek;
+  const startOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() + distanceToMonday);
+  const endOfWeek = new Date(startOfWeek.getFullYear(), startOfWeek.getMonth(), startOfWeek.getDate() + 6);
+
+  const fmt = (d: Date) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+
+  return { start: fmt(startOfWeek), end: fmt(endOfWeek) };
+}
+
+export function getUserActiveLimitAndExpense(
+  user: typeof users.$inferSelect,
+  allTx: (typeof transactions.$inferSelect)[]
+) {
+  const period = user.expenseLimitPeriod || 'bulanan';
+  const currentMonth = getCurrentMonthString();
+  const currentYear = getCurrentYearString();
+  const weekRange = getCurrentWeekRange();
+
+  let activeLimit = user.monthlyExpenseLimit || 0;
+  let activeExpense = 0;
+  let periodLabel = 'Bulan Ini';
+
+  if (period === 'mingguan') {
+    activeLimit = user.weeklyExpenseLimit || 0;
+    activeExpense = allTx
+      .filter((t) => t.tipe === 'pengeluaran' && t.tanggal >= weekRange.start && t.tanggal <= weekRange.end)
+      .reduce((sum, t) => sum + t.nominal, 0);
+    periodLabel = 'Minggu Ini';
+  } else if (period === 'tahunan') {
+    activeLimit = user.yearlyExpenseLimit || 0;
+    activeExpense = allTx
+      .filter((t) => t.tipe === 'pengeluaran' && t.tanggal.startsWith(currentYear))
+      .reduce((sum, t) => sum + t.nominal, 0);
+    periodLabel = 'Tahun Ini';
+  } else {
+    activeLimit = user.monthlyExpenseLimit || 0;
+    activeExpense = allTx
+      .filter((t) => t.tipe === 'pengeluaran' && t.tanggal.startsWith(currentMonth))
+      .reduce((sum, t) => sum + t.nominal, 0);
+    periodLabel = 'Bulan Ini';
+  }
+
+  const isOverLimit = activeLimit > 0 && activeExpense > activeLimit;
+  const remainingBudget = activeLimit - activeExpense;
+
+  return {
+    period,
+    periodLabel,
+    activeLimit,
+    activeExpense,
+    isOverLimit,
+    remainingBudget,
+  };
 }
 
 /**
@@ -292,8 +359,7 @@ async function handleSaldoCommand(chatId: string, user: typeof users.$inferSelec
     .filter((t) => t.tipe === 'pengeluaran' && t.tanggal.startsWith(currentMonth))
     .reduce((sum, t) => sum + t.nominal, 0);
 
-  const expenseLimit = user.monthlyExpenseLimit || 0;
-  const isOverLimit = expenseLimit > 0 && monthlyExpense > expenseLimit;
+  const status = getUserActiveLimitAndExpense(user, allTx);
 
   let msg = `💳 <b>RINGKASAN SALDO ANDA</b>\n` +
     `━━━━━━━━━━━━━━━━━━━━\n` +
@@ -305,13 +371,12 @@ async function handleSaldoCommand(chatId: string, user: typeof users.$inferSelec
     `• Masuk: <b>+${formatIDR(monthlyIncome)}</b>\n` +
     `• Keluar: <b>-${formatIDR(monthlyExpense)}</b>\n`;
 
-  if (expenseLimit > 0) {
-    const sisa = expenseLimit - monthlyExpense;
-    msg += `\n🎯 <b>Batas Belanja Bulanan:</b>\n` +
-      `• Limit: ${formatIDR(expenseLimit)}\n` +
-      `• Terpakai: ${generateProgressBar(monthlyExpense, expenseLimit)}\n` +
-      `• Sisa: <b>${sisa >= 0 ? formatIDR(sisa) : '-' + formatIDR(Math.abs(sisa))}</b> ` +
-      `${isOverLimit ? '⚠️ <i>(Melebihi Limit!)</i>' : '✅ <i>(Aman)</i>'}\n`;
+  if (status.activeLimit > 0) {
+    msg += `\n🎯 <b>Batas Belanja (${status.period}):</b>\n` +
+      `• Limit: ${formatIDR(status.activeLimit)}\n` +
+      `• Terpakai: ${generateProgressBar(status.activeExpense, status.activeLimit)} (${status.periodLabel})\n` +
+      `• Sisa: <b>${status.remainingBudget >= 0 ? formatIDR(status.remainingBudget) : '-' + formatIDR(Math.abs(status.remainingBudget))}</b> ` +
+      `${status.isOverLimit ? '⚠️ <i>(Melebihi Limit!)</i>' : '✅ <i>(Aman)</i>'}\n`;
   }
 
   msg += `\n💡 <i>Ketik nominal atau kalimat seperti "Makan siang 25rb" untuk mencatat transaksi.</i>`;
@@ -389,16 +454,31 @@ async function handleLaporanCommand(chatId: string, user: typeof users.$inferSel
 async function handleBudgetCommand(chatId: string, user: typeof users.$inferSelect, cmdText: string) {
   const parts = cmdText.split(/\s+/);
 
-  // Subcommand: /budget limit <nominal>
+  // Subcommand: /budget limit [mingguan|bulanan|tahunan] <nominal>
   if (parts.length >= 3 && parts[1].toLowerCase() === 'limit') {
-    const rawNum = parts[2].replace(/[.,]/g, '');
+    let targetPeriod = (user.expenseLimitPeriod || 'bulanan').toLowerCase();
+    let numStr = parts[2];
+
+    if (parts.length >= 4 && ['mingguan', 'bulanan', 'tahunan'].includes(parts[2].toLowerCase())) {
+      targetPeriod = parts[2].toLowerCase();
+      numStr = parts[3];
+    }
+
+    const rawNum = numStr.replace(/[.,]/g, '');
     const newLimit = parseFloat(rawNum);
     if (!isNaN(newLimit) && newLimit >= 0) {
-      await db.update(users).set({ monthlyExpenseLimit: newLimit }).where(eq(users.id, user.id));
+      if (targetPeriod === 'mingguan') {
+        await db.update(users).set({ weeklyExpenseLimit: newLimit }).where(eq(users.id, user.id));
+      } else if (targetPeriod === 'tahunan') {
+        await db.update(users).set({ yearlyExpenseLimit: newLimit }).where(eq(users.id, user.id));
+      } else {
+        await db.update(users).set({ monthlyExpenseLimit: newLimit }).where(eq(users.id, user.id));
+      }
+
       await sendTelegramMessage(
         chatId,
-        `✅ <b>Batas pengeluaran bulanan berhasil diubah!</b>\n` +
-        `Batas baru: <b>${formatIDR(newLimit)}</b>`
+        `✅ <b>Batas pengeluaran ${targetPeriod} berhasil diubah!</b>\n` +
+        `Batas baru (${targetPeriod}): <b>${formatIDR(newLimit)}</b>`
       );
       return;
     }
@@ -439,10 +519,6 @@ async function handleBudgetCommand(chatId: string, user: typeof users.$inferSele
     .from(transactions)
     .where(eq(transactions.userId, user.id));
 
-  const monthlyExpense = allTx
-    .filter((t) => t.tipe === 'pengeluaran' && t.tanggal.startsWith(currentMonth))
-    .reduce((sum, t) => sum + t.nominal, 0);
-
   const monthlyIncome = allTx
     .filter((t) => t.tipe === 'pemasukan' && t.tanggal.startsWith(currentMonth))
     .reduce((sum, t) => sum + t.nominal, 0);
@@ -453,25 +529,28 @@ async function handleBudgetCommand(chatId: string, user: typeof users.$inferSele
     .from(savingsGoals)
     .where(eq(savingsGoals.userId, user.id));
 
-  const expenseLimit = user.monthlyExpenseLimit || 0;
   const incomeGoal = user.monthlyIncomeGoal || 0;
-  const period = user.expenseLimitPeriod || 'bulanan';
-  const remainingBudget = expenseLimit - monthlyExpense;
-  const isOverLimit = expenseLimit > 0 && monthlyExpense > expenseLimit;
+  const status = getUserActiveLimitAndExpense(user, allTx);
 
   let msg = `🎯 <b>PEMANTAUAN ANGGARAN & TARGET</b>\n` +
     `━━━━━━━━━━━━━━━━━━━━\n\n` +
-    `💸 <b>Batas Pengeluaran (${period}):</b>\n`;
+    `💸 <b>Batas Pengeluaran Aktif (${status.period}):</b>\n`;
 
-  if (expenseLimit > 0) {
-    msg += `• Terpakai: <b>${formatIDR(monthlyExpense)}</b> dari ${formatIDR(expenseLimit)}\n` +
-      `• Progres: ${generateProgressBar(monthlyExpense, expenseLimit)}\n` +
-      `• Sisa: <b>${remainingBudget >= 0 ? formatIDR(remainingBudget) : '-' + formatIDR(Math.abs(remainingBudget))}</b> ` +
-      `${isOverLimit ? '🔴 <b>(MELEBIHI LIMIT!)</b>' : '🟢 <i>(Terkendali)</i>'}\n\n`;
+  if (status.activeLimit > 0) {
+    msg += `• Terpakai: <b>${formatIDR(status.activeExpense)}</b> dari ${formatIDR(status.activeLimit)} (${status.periodLabel})\n` +
+      `• Progres: ${generateProgressBar(status.activeExpense, status.activeLimit)}\n` +
+      `• Sisa: <b>${status.remainingBudget >= 0 ? formatIDR(status.remainingBudget) : '-' + formatIDR(Math.abs(status.remainingBudget))}</b> ` +
+      `${status.isOverLimit ? '🔴 <b>(MELEBIHI LIMIT!)</b>' : '🟢 <i>(Terkendali)</i>'}\n\n`;
   } else {
-    msg += `<i>Belum ada batas pengeluaran yang diatur.</i>\n` +
+    msg += `<i>Belum ada batas pengeluaran ${status.period} yang diatur.</i>\n` +
       `Gunakan <code>/budget limit 3000000</code> untuk mengatur.\n\n`;
   }
+
+  // Display all 3 independent limits summary
+  msg += `📋 <b>Daftar Batasan Tersimpan:</b>\n` +
+    `• Mingguan: <b>${formatIDR(user.weeklyExpenseLimit || 0)}</b> ${status.period === 'mingguan' ? '⭐ <i>(Aktif)</i>' : ''}\n` +
+    `• Bulanan: <b>${formatIDR(user.monthlyExpenseLimit || 0)}</b> ${status.period === 'bulanan' ? '⭐ <i>(Aktif)</i>' : ''}\n` +
+    `• Tahunan: <b>${formatIDR(user.yearlyExpenseLimit || 0)}</b> ${status.period === 'tahunan' ? '⭐ <i>(Aktif)</i>' : ''}\n\n`;
 
   msg += `📈 <b>Target Pemasukan Bulanan:</b>\n`;
   if (incomeGoal > 0) {
@@ -494,8 +573,11 @@ async function handleBudgetCommand(chatId: string, user: typeof users.$inferSele
   }
 
   msg += `\n━━━━━━━━━━━━━━━━━━━━\n` +
-    `⚙️ <b>Perintah Pengaturan Cepat:</b>\n` +
-    `• <code>/budget limit &lt;nominal&gt;</code>\n` +
+    `⚙️ <b>Perintah Pengaturan:</b>\n` +
+    `• <code>/budget limit &lt;nominal&gt;</code> (Ubah limit periode aktif)\n` +
+    `• <code>/budget limit mingguan 500000</code>\n` +
+    `• <code>/budget limit bulanan 3000000</code>\n` +
+    `• <code>/budget limit tahunan 40000000</code>\n` +
     `• <code>/budget target &lt;nominal&gt;</code>\n` +
     `• <code>/budget periode &lt;mingguan|bulanan|tahunan&gt;</code>`;
 
@@ -514,6 +596,9 @@ async function handleNaturalLanguageTransaction(
     // Call AI to parse message
     const parsed = await parseTransaction(text);
 
+    // Clean description strictly so nominal is NOT part of notes
+    const cleanDesc = cleanTransactionDescription(parsed.description || text, parsed.category, parsed.type);
+
     const today = getTodayDateString();
     const txId = Date.now().toString();
     const txType = parsed.type === 'income' ? 'pemasukan' : 'pengeluaran';
@@ -525,26 +610,20 @@ async function handleNaturalLanguageTransaction(
       nominal: parsed.amount,
       kategori: parsed.category,
       tanggal: txDate,
-      catatan: parsed.description,
+      catatan: cleanDesc,
       tipe: txType,
     };
 
     // Save directly to transactions table
     await db.insert(transactions).values(newTx);
 
-    // Calculate updated monthly status
-    const currentMonth = getCurrentMonthString();
+    // Calculate updated status according to user's active limit period
     const allUserTx = await db
       .select()
       .from(transactions)
       .where(eq(transactions.userId, user.id));
 
-    const monthlyExpense = allUserTx
-      .filter((t) => t.tipe === 'pengeluaran' && t.tanggal.startsWith(currentMonth))
-      .reduce((sum, t) => sum + t.nominal, 0);
-
-    const expenseLimit = user.monthlyExpenseLimit || 0;
-    const isOverLimit = expenseLimit > 0 && monthlyExpense > expenseLimit;
+    const status = getUserActiveLimitAndExpense(user, allUserTx);
 
     // Build friendly confirmation message
     const icon = txType === 'pemasukan' ? '💰' : '💸';
@@ -555,17 +634,16 @@ async function handleNaturalLanguageTransaction(
       `${icon} <b>Jenis:</b> ${typeLabel}\n` +
       `🏷️ <b>Kategori:</b> ${parsed.category}\n` +
       `💵 <b>Nominal:</b> <b>${formatIDR(parsed.amount)}</b>\n` +
-      `📝 <b>Catatan:</b> ${parsed.description}\n` +
+      `📝 <b>Catatan:</b> ${cleanDesc}\n` +
       `💳 <b>Metode:</b> ${parsed.paymentMethod.replace('_', ' ').toUpperCase()}\n` +
       `📅 <b>Tanggal:</b> ${txDate}\n` +
       `━━━━━━━━━━━━━━━━━━━━\n`;
 
-    if (txType === 'pengeluaran' && expenseLimit > 0) {
-      const sisa = expenseLimit - monthlyExpense;
-      if (isOverLimit) {
-        reply += `⚠️ <b>Peringatan:</b> Pengeluaran bulan ini (<b>${formatIDR(monthlyExpense)}</b>) telah melebihi batas (<b>${formatIDR(expenseLimit)}</b>)!\n`;
+    if (txType === 'pengeluaran' && status.activeLimit > 0) {
+      if (status.isOverLimit) {
+        reply += `⚠️ <b>Peringatan:</b> Pengeluaran ${status.period} ini (<b>${formatIDR(status.activeExpense)}</b>) telah melebihi batas (<b>${formatIDR(status.activeLimit)}</b>)!\n`;
       } else {
-        reply += `🛡️ <b>Sisa Anggaran Belanja Bulan Ini:</b> <b>${formatIDR(sisa)}</b>\n`;
+        reply += `🛡️ <b>Sisa Batas Belanja (${status.period}):</b> <b>${formatIDR(status.remainingBudget)}</b>\n`;
       }
     }
 
@@ -628,9 +706,11 @@ async function handleReceiptPhotoUpload(
     const mimeType = imgFetch.headers.get('content-type') || 'image/jpeg';
     const dataUri = `data:${mimeType};base64,${base64Str}`;
 
-    // 4. Pass to parseReceiptImage
-    const caption = message.caption || '';
+    // 4. Pass to parseReceiptImage (caption is optional and can be empty)
+    const caption = message.caption?.trim() || '';
     const parsed = await parseReceiptImage(dataUri, caption);
+
+    const cleanDesc = cleanTransactionDescription(parsed.description || 'Bukti Pembayaran', parsed.category, parsed.type);
 
     const today = getTodayDateString();
     const txId = Date.now().toString();
@@ -643,7 +723,7 @@ async function handleReceiptPhotoUpload(
       nominal: parsed.amount,
       kategori: parsed.category,
       tanggal: txDate,
-      catatan: parsed.description || 'Bukti Pembayaran',
+      catatan: cleanDesc,
       tipe: txType,
       buktiPembayaran: dataUri,
     };
@@ -651,19 +731,13 @@ async function handleReceiptPhotoUpload(
     // 5. Insert directly to database
     await db.insert(transactions).values(newTx);
 
-    // 6. Check budget limits
-    const currentMonth = getCurrentMonthString();
+    // 6. Check budget limits according to user active period
     const allUserTx = await db
       .select()
       .from(transactions)
       .where(eq(transactions.userId, user.id));
 
-    const monthlyExpense = allUserTx
-      .filter((t) => t.tipe === 'pengeluaran' && t.tanggal.startsWith(currentMonth))
-      .reduce((sum, t) => sum + t.nominal, 0);
-
-    const expenseLimit = user.monthlyExpenseLimit || 0;
-    const isOverLimit = expenseLimit > 0 && monthlyExpense > expenseLimit;
+    const status = getUserActiveLimitAndExpense(user, allUserTx);
 
     const icon = txType === 'pemasukan' ? '💰' : '🧾';
     const typeLabel = txType === 'pemasukan' ? 'Pemasukan' : 'Pengeluaran';
@@ -673,18 +747,17 @@ async function handleReceiptPhotoUpload(
       `${icon} <b>Jenis:</b> ${typeLabel}\n` +
       `🏷️ <b>Kategori:</b> ${parsed.category}\n` +
       `💵 <b>Total Nominal:</b> <b>${formatIDR(parsed.amount)}</b>\n` +
-      `📝 <b>Keterangan:</b> ${parsed.description}\n` +
+      `📝 <b>Keterangan:</b> ${cleanDesc}\n` +
       `💳 <b>Metode:</b> ${parsed.paymentMethod.replace('_', ' ').toUpperCase()}\n` +
       `📅 <b>Tanggal:</b> ${txDate}\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
       `📸 <i>Foto bukti pembayaran berhasil disimpan ke riwayat transaksi Uangku.</i>\n`;
 
-    if (txType === 'pengeluaran' && expenseLimit > 0) {
-      const sisa = expenseLimit - monthlyExpense;
-      if (isOverLimit) {
-        reply += `\n⚠️ <b>Peringatan:</b> Pengeluaran bulan ini (<b>${formatIDR(monthlyExpense)}</b>) telah melebihi batas anggaran (<b>${formatIDR(expenseLimit)}</b>)!\n`;
+    if (txType === 'pengeluaran' && status.activeLimit > 0) {
+      if (status.isOverLimit) {
+        reply += `\n⚠️ <b>Peringatan:</b> Pengeluaran ${status.period} ini (<b>${formatIDR(status.activeExpense)}</b>) telah melebihi batas anggaran (<b>${formatIDR(status.activeLimit)}</b>)!\n`;
       } else {
-        reply += `\n🛡️ <b>Sisa Batas Belanja Bulan Ini:</b> <b>${formatIDR(sisa)}</b>\n`;
+        reply += `\n🛡️ <b>Sisa Batas Belanja (${status.period}):</b> <b>${formatIDR(status.remainingBudget)}</b>\n`;
       }
     }
 
@@ -699,7 +772,7 @@ async function handleReceiptPhotoUpload(
       `Alasan: <i>${err.message || 'Format gambar atau teks tidak terbaca.'}</i>\n\n` +
       `💡 <b>Tips:</b>\n` +
       `• Pastikan foto struk/bukti transfer terang, fokus, dan nominal total terlihat jelas.\n` +
-      `• Atau kamu juga bisa mengirim foto disertai caption (keterangan), misal: <i>"Makan siang 45rb"</i>.`
+      `• Bot dapat langsung membaca gambar tanpa caption.`
     );
   }
 }

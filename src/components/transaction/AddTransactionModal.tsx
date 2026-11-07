@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import Button from '../ui/Button';
 import Input from '../ui/Input';
-import { X, DollarSign, Calendar, Tag, FileText, Sparkles, Loader2, Check } from 'lucide-react';
+import { X, DollarSign, Calendar, Tag, FileText, Sparkles, Loader2, Check, Camera, Image as ImageIcon } from 'lucide-react';
 import type { Transaction } from './RecentTransactions';
 
 interface AddTransactionModalProps {
@@ -30,11 +30,15 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
   const [kategori, setKategori] = useState('Makanan');
   const [tanggal, setTanggal] = useState('');
   const [catatan, setCatatan] = useState('');
+  const [receiptImage, setReceiptImage] = useState<string | null>(null);
+  const [receiptLoading, setReceiptLoading] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [aiInput, setAiInput] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
   const [aiSuccess, setAiSuccess] = useState(false);
   const [aiError, setAiError] = useState('');
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Set default date to today
   useEffect(() => {
@@ -46,6 +50,8 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
       setNominal('');
       setKategori('Makanan');
       setCatatan('');
+      setReceiptImage(null);
+      setReceiptLoading(false);
       setErrors({});
       setAiInput('');
       setAiLoading(false);
@@ -87,7 +93,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
           setKategori(tx.category || 'Lainnya');
         }
 
-        setCatatan(tx.description || aiInput.trim());
+        setCatatan(tx.description || 'Transaksi');
         if (tx.date) {
           setTanggal(tx.date);
         }
@@ -99,6 +105,61 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
     } finally {
       setAiLoading(false);
     }
+  };
+
+  const handleReceiptFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const dataUri = reader.result as string;
+      setReceiptImage(dataUri);
+      setReceiptLoading(true);
+      setAiError('');
+      setAiSuccess(false);
+
+      try {
+        const res = await fetch('/api/ai/parse-receipt', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ image: dataUri }) // Tanpa caption
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.error || 'Gagal membaca nota pembayaran');
+        }
+
+        const tx = data.transaction;
+        if (tx) {
+          setNominal(tx.amount.toString());
+          setTipe(tx.type === 'income' ? 'pemasukan' : 'pengeluaran');
+
+          const matchCategory = CATEGORIES.find(
+            c => c.name.toLowerCase() === (tx.category || '').toLowerCase()
+          );
+          if (matchCategory) {
+            setKategori(matchCategory.name);
+          } else if (tx.type === 'income') {
+            setKategori('Lainnya');
+          } else {
+            setKategori(tx.category || 'Lainnya');
+          }
+
+          setCatatan(tx.description || 'Struk Belanja');
+          if (tx.date) {
+            setTanggal(tx.date);
+          }
+          setAiSuccess(true);
+          setTimeout(() => setAiSuccess(false), 3000);
+        }
+      } catch (err: any) {
+        setAiError(err.message || 'Gagal menganalisis nota pembayaran');
+      } finally {
+        setReceiptLoading(false);
+      }
+    };
+    reader.readAsDataURL(file);
   };
 
   const formatPreviewIDR = (valStr: string) => {
@@ -138,7 +199,8 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
       kategori,
       tanggal,
       catatan: catatan.trim(),
-      tipe
+      tipe,
+      buktiPembayaran: receiptImage || undefined
     });
     
     onClose();
@@ -183,12 +245,12 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
 
                 {/* Scrollable Content Body */}
                 <div className="flex-1 overflow-y-auto p-8 flex flex-col gap-6">
-                  {/* AI Smart Input */}
-                  <div className="p-4 rounded-[20px] bg-bg-custom shadow-neumorph-sm-in border border-primary-custom/20 flex flex-col gap-2.5">
+                  {/* AI Smart Input & Receipt Vision */}
+                  <div className="p-4 rounded-[20px] bg-bg-custom shadow-neumorph-sm-in border border-primary-custom/20 flex flex-col gap-3">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-1.5 text-xs font-bold text-primary-custom">
                         <Sparkles className="w-4 h-4 text-primary-custom animate-pulse" />
-                        <span>Catat Cepat dengan AI</span>
+                        <span>Catat Cepat dengan AI & Nota</span>
                       </div>
                       {aiSuccess && (
                         <span className="text-[11px] font-bold text-success-custom flex items-center gap-1">
@@ -196,6 +258,16 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                         </span>
                       )}
                     </div>
+
+                    {/* Hidden file input for receipts */}
+                    <input
+                      type="file"
+                      ref={fileInputRef}
+                      onChange={handleReceiptFileChange}
+                      accept="image/*"
+                      className="hidden"
+                    />
+
                     <div className="flex gap-2">
                       <input
                         type="text"
@@ -213,19 +285,60 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                       <Button
                         type="button"
                         onClick={handleAiParse}
-                        disabled={aiLoading || !aiInput.trim()}
+                        disabled={aiLoading || receiptLoading || !aiInput.trim()}
                         size="sm"
                         variant="primary"
-                        className="px-4 py-2.5 rounded-[14px] text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                        className="px-3.5 py-2.5 rounded-[14px] text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                        title="Ekstrak teks kalimat"
                       >
                         {aiLoading ? (
                           <Loader2 className="w-3.5 h-3.5 animate-spin" />
                         ) : (
                           <Sparkles className="w-3.5 h-3.5" />
                         )}
-                        <span>{aiLoading ? 'Memproses...' : 'Ekstrak'}</span>
+                        <span className="hidden sm:inline">{aiLoading ? 'Proses...' : 'Ekstrak'}</span>
                       </Button>
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={aiLoading || receiptLoading}
+                        className="px-3 py-2.5 rounded-[14px] bg-bg-custom shadow-neumorph-sm-out hover:shadow-neumorph-out active:shadow-neumorph-sm-in border border-white/40 text-primary-custom text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50 transition-all"
+                        title="Pindai Foto Nota / Bukti Pembayaran (AI Vision tanpa caption)"
+                      >
+                        {receiptLoading ? (
+                          <Loader2 className="w-4 h-4 animate-spin text-primary-custom" />
+                        ) : (
+                          <Camera className="w-4 h-4 text-primary-custom" />
+                        )}
+                        <span className="hidden sm:inline">Pindai Nota</span>
+                      </button>
                     </div>
+
+                    {/* Receipt Preview Thumbnail if uploaded */}
+                    {receiptImage && (
+                      <div className="flex items-center justify-between p-2 rounded-[14px] bg-bg-custom shadow-neumorph-sm-out border border-primary-custom/20 mt-1">
+                        <div className="flex items-center gap-2.5">
+                          <img
+                            src={receiptImage}
+                            alt="Bukti Nota"
+                            className="w-10 h-10 object-cover rounded-[10px] shadow-sm"
+                          />
+                          <div className="flex flex-col">
+                            <span className="text-[11px] font-bold text-dark-custom">Bukti Pembayaran Terlampir</span>
+                            <span className="text-[10px] text-secondary-custom font-medium">Foto berhasil dipindai oleh AI Vision</span>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setReceiptImage(null)}
+                          className="p-1 rounded-[8px] text-secondary-custom hover:text-danger-custom transition-colors"
+                          title="Hapus foto"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                    )}
+
                     {aiError && (
                       <span className="text-[11px] font-semibold text-danger-custom">{aiError}</span>
                     )}

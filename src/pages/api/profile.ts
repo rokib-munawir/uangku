@@ -41,7 +41,9 @@ export const GET: APIRoute = async (context) => {
       email: session.user.email,
       avatar: 'avatar_user',
       monthlyIncomeGoal: 10000000,
+      weeklyExpenseLimit: 1250000,
       monthlyExpenseLimit: 5000000,
+      yearlyExpenseLimit: 60000000,
       expenseLimitPeriod: 'bulanan'
     };
 
@@ -77,7 +79,16 @@ export const POST: APIRoute = async (context) => {
 
     const userId = session.user.id;
     const body = await context.request.json();
-    const { name, email, avatar, monthlyIncomeGoal, monthlyExpenseLimit, expenseLimitPeriod } = body;
+    const {
+      name,
+      email,
+      avatar,
+      monthlyIncomeGoal,
+      weeklyExpenseLimit,
+      monthlyExpenseLimit,
+      yearlyExpenseLimit,
+      expenseLimitPeriod
+    } = body;
 
     // Convert emoji string to safe database key (e.g. '👨‍💻' -> 'avatar_dev_m')
     const dbAvatar = getKeyFromEmoji(avatar);
@@ -85,30 +96,34 @@ export const POST: APIRoute = async (context) => {
     // Normalize period
     const validPeriod = ['mingguan', 'bulanan', 'tahunan'].includes(expenseLimitPeriod) ? expenseLimitPeriod : 'bulanan';
 
+    // Parse limits safely
+    const parsedWeekly = parseFloat(weeklyExpenseLimit);
+    const parsedMonthly = parseFloat(monthlyExpenseLimit);
+    const parsedYearly = parseFloat(yearlyExpenseLimit);
+
     // Check if the user exists
     const existingUsers = await db.select().from(users).where(eq(users.id, userId));
+
+    const payload = {
+      name,
+      email,
+      avatar: dbAvatar,
+      monthlyIncomeGoal: parseFloat(monthlyIncomeGoal) || 0,
+      weeklyExpenseLimit: !isNaN(parsedWeekly) ? parsedWeekly : 0,
+      monthlyExpenseLimit: !isNaN(parsedMonthly) ? parsedMonthly : 0,
+      yearlyExpenseLimit: !isNaN(parsedYearly) ? parsedYearly : 0,
+      expenseLimitPeriod: validPeriod
+    };
 
     if (existingUsers.length === 0) {
       // Insert new
       await db.insert(users).values({
         id: userId,
-        name,
-        email,
-        avatar: dbAvatar,
-        monthlyIncomeGoal: parseFloat(monthlyIncomeGoal) || 0,
-        monthlyExpenseLimit: parseFloat(monthlyExpenseLimit) || 0,
-        expenseLimitPeriod: validPeriod
+        ...payload
       });
     } else {
       // Update existing
-      await db.update(users).set({
-        name,
-        email,
-        avatar: dbAvatar,
-        monthlyIncomeGoal: parseFloat(monthlyIncomeGoal) || 0,
-        monthlyExpenseLimit: parseFloat(monthlyExpenseLimit) || 0,
-        expenseLimitPeriod: validPeriod
-      }).where(eq(users.id, userId));
+      await db.update(users).set(payload).where(eq(users.id, userId));
     }
 
     return new Response(JSON.stringify({ success: true }), {
